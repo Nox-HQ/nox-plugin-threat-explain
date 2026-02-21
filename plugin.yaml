@@ -1,0 +1,7 @@
+name: nox-plugin-threat-explain
+version: 0.1.0
+track: threat-modeling
+description: Threat pattern detection with audience-targeted impact explanations
+tools:
+  - name: scan
+    description: Scan source files for threat patterns with impact explanations and audience targeting
