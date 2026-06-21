@@ -41,11 +41,16 @@ var rules = []threatRule{
 		Audience:    "developer",
 		Explanation: "The authentication implementation uses weak patterns that could allow credential stuffing, brute force, or session hijacking attacks. This directly impacts user account security.",
 		CWE:         "CWE-287",
+		// Plaintext comparison is flagged only when a password-like value is
+		// compared directly against a STORED credential (stored/saved/db/
+		// record/expected...). Bare `password == ...` matched empty-string
+		// guards (`password == ""`) and registration confirm-password checks
+		// (`password == confirmPassword`) — neither is an auth weakness.
 		Patterns: map[string]*regexp.Regexp{
-			".go": regexp.MustCompile(`(?i)(password\s*==\s*|strings\.Compare\(.*password|md5\.Sum\(.*password|sha1\.Sum\(.*password|plaintext.*password|password.*plaintext)`),
-			".py": regexp.MustCompile(`(?i)(password\s*==\s*|hashlib\.md5\(.*password|hashlib\.sha1\(.*password|check_password\s*=\s*lambda|plaintext.*password|password.*plaintext)`),
-			".js": regexp.MustCompile(`(?i)(password\s*===?\s*|md5\(.*password|sha1\(.*password|plaintext.*password|password.*plaintext|\.compareSync\(.*password.*,\s*["'])`),
-			".ts": regexp.MustCompile(`(?i)(password\s*===?\s*|md5\(.*password|sha1\(.*password|plaintext.*password|password.*plaintext|\.compareSync\(.*password.*,\s*["'])`),
+			".go": regexp.MustCompile(`(?i)(\w*password\w*\s*==\s*(?:stored|saved|db|database|record|expected|actual|real|correct)\w*|strings\.Compare\(.*password|md5\.Sum\(.*password|sha1\.Sum\(.*password|plaintext.*password|password.*plaintext)`),
+			".py": regexp.MustCompile(`(?i)(\w*password\w*\s*==\s*(?:stored|saved|db|database|record|expected|actual|real|correct)\w*|hashlib\.md5\(.*password|hashlib\.sha1\(.*password|check_password\s*=\s*lambda|plaintext.*password|password.*plaintext)`),
+			".js": regexp.MustCompile(`(?i)(\w*password\w*\s*===?\s*(?:stored|saved|db|database|record|expected|actual|real|correct)\w*|md5\(.*password|sha1\(.*password|plaintext.*password|password.*plaintext|\.compareSync\(.*password.*,\s*["'])`),
+			".ts": regexp.MustCompile(`(?i)(\w*password\w*\s*===?\s*(?:stored|saved|db|database|record|expected|actual|real|correct)\w*|md5\(.*password|sha1\(.*password|plaintext.*password|password.*plaintext|\.compareSync\(.*password.*,\s*["'])`),
 		},
 	},
 	{
@@ -75,7 +80,7 @@ var rules = []threatRule{
 		CWE:         "CWE-862",
 		Patterns: map[string]*regexp.Regexp{
 			".go": regexp.MustCompile(`(?i)(r\.URL\.Path.*(?:admin|manage|config|internal|private)|http\.Handle\w*\(.*(?:admin|manage|delete|config).*,\s*\w+\)|mux\.\w+\(.*(?:admin|manage|delete|config))`),
-			".py": regexp.MustCompile(`(?i)(@app\.route\(.*(?:admin|manage|config|internal|private)|@blueprint\.route\(.*(?:admin|manage|delete|config)|def\s+(?:admin|manage|delete)_\w+)`),
+			".py": regexp.MustCompile(`(?i)@\w+\.route\(.*(?:admin|manage|config|internal|private)`),
 			".js": regexp.MustCompile(`(?i)(router\.\w+\(.*(?:admin|manage|config|internal|private)|app\.\w+\(.*(?:admin|manage|delete|config).*,\s*\w+\))`),
 			".ts": regexp.MustCompile(`(?i)(router\.\w+\(.*(?:admin|manage|config|internal|private)|app\.\w+\(.*(?:admin|manage|delete|config).*,\s*\w+\))`),
 		},
@@ -169,6 +174,17 @@ func handleScan(ctx context.Context, req sdk.ToolRequest) (*pluginv1.InvokeToolR
 	return resp.Build(), nil
 }
 
+// reAuthGuard matches inline authorization middleware and auth decorators.
+// EXPLAIN-003 flags privileged routes that lack an authorization check; if an
+// auth guard sits on the same line (Express/Go middleware) or within a few
+// lines (Python/decorator stacks), the route IS protected and must not be
+// reported as a gap.
+var reAuthGuard = regexp.MustCompile(`(?i)(@\w*(?:login_required|requires?_auth|auth_required|admin_required|permission_required|roles?_required|jwt_required|authenticated|authorize)\w*|\b(?:require[Aa]uth|require[Aa]dmin|require[Rr]ole|ensure[Aa]uth|ensure[Ll]oggedIn|is[Aa]uthenticated|is[Aa]dmin|check[Aa]uth|verify[Tt]oken|authorize|authMiddleware|with[Aa]uth|protect|hasRole|hasPermission)\b)`)
+
+// authWindow is how many lines above/below a match are inspected for an auth
+// guard before EXPLAIN-003 fires.
+const authWindow = 3
+
 func scanFile(resp *sdk.ResponseBuilder, filePath, ext string) error {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -176,11 +192,17 @@ func scanFile(resp *sdk.ResponseBuilder, filePath, ext string) error {
 	}
 	defer func() { _ = f.Close() }()
 
+	var lines []string
 	scanner := bufio.NewScanner(f)
-	lineNum := 0
 	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	for idx, line := range lines {
+		lineNum := idx + 1
 
 		for i := range rules {
 			rule := &rules[i]
@@ -189,6 +211,11 @@ func scanFile(resp *sdk.ResponseBuilder, filePath, ext string) error {
 				continue
 			}
 			if pattern.MatchString(line) {
+				// EXPLAIN-003 is an access-control gap; suppress it when an
+				// authorization guard is present in the surrounding window.
+				if rule.ID == "EXPLAIN-003" && hasAuthGuardNearby(lines, idx) {
+					continue
+				}
 				resp.Finding(
 					rule.ID,
 					rule.Severity,
@@ -206,7 +233,26 @@ func scanFile(resp *sdk.ResponseBuilder, filePath, ext string) error {
 		}
 	}
 
-	return scanner.Err()
+	return nil
+}
+
+// hasAuthGuardNearby reports whether an authorization guard appears on the
+// matched line or within authWindow lines above/below it.
+func hasAuthGuardNearby(lines []string, idx int) bool {
+	lo := idx - authWindow
+	if lo < 0 {
+		lo = 0
+	}
+	hi := idx + authWindow
+	if hi >= len(lines) {
+		hi = len(lines) - 1
+	}
+	for i := lo; i <= hi; i++ {
+		if reAuthGuard.MatchString(lines[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 func extToLanguage(ext string) string {

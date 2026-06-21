@@ -1,9 +1,9 @@
 package main
 
 import (
+	"crypto/des"
 	"crypto/md5"
 	"crypto/sha1"
-	"crypto/des"
 	"fmt"
 	"log"
 	"net/http"

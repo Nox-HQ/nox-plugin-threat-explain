@@ -113,6 +113,22 @@ func TestScanFindsEncryptionWeakness(t *testing.T) {
 	}
 }
 
+// TestCleanCodeNoFindings is the false-positive guard: idiomatic safe code —
+// empty-password guards, registration confirm-password checks, bcrypt
+// verification, strong hashing (sha256), and admin routes that ARE protected
+// by authorization middleware/decorators — must produce zero findings.
+func TestCleanCodeNoFindings(t *testing.T) {
+	client := testClient(t)
+	resp := invokeScan(t, client, filepath.Join(testdataDir(t), "clean"))
+
+	for _, f := range resp.GetFindings() {
+		t.Errorf("unexpected false positive %s at line %d — %s",
+			f.GetRuleId(),
+			f.GetLocation().GetStartLine(),
+			f.GetMessage())
+	}
+}
+
 func TestScanEmptyWorkspace(t *testing.T) {
 	client := testClient(t)
 	resp := invokeScan(t, client, t.TempDir())
