@@ -1,5 +1,5 @@
 name: nox-plugin-threat-explain
-version: 0.1.0
+version: 0.2.0
 track: threat-modeling
 description: Threat pattern detection with audience-targeted impact explanations
 tools:
