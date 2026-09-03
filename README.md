@@ -1,3 +1,45 @@
+> ## ⚠️ Archived — superseded by nox core and `nox/threat-enrich`
+>
+> **Do not install this plugin.** Core emits `cwe` metadata on rule findings and
+> links `cwe.mitre.org` references from SARIF; `nox/threat-enrich` turns those
+> into CWE → OWASP Top 10 → MITRE ATT&CK write-ups with remediation prose.
+>
+> Archived because `scan` returns `{}` for every input — and because its tool is
+> *named* `scan`, nox invoked it on every scan of any project that listed it, so
+> it ran and produced nothing rather than merely being idle:
+>
+> ```
+> $ nox plugin call nox/threat-explain scan
+> {}
+> $ nox plugin call nox/threat-explain scan workspace_root=/path/to/corpus
+> {}
+> ```
+>
+> Measured 2026-09-03 on two corpora — one mixed (Go/JS/Python source,
+> Terraform, Dockerfiles, npm lockfile; 196 core findings across VULN, IAC, SEC,
+> TAINT, SLOP, CONTAINER and AI rules) and one of four-language precision suites
+> (84 core findings):
+>
+> | | +findings | +enrichments |
+> |---|---|---|
+> | core 1.33.0 + nox/threat-explain | 0 | 0 |
+>
+> The post-scan path was working on the same machine in the same runs:
+> `nox/threat-enrich` added 64–80 enrichments and `nox/triage-agent` 335.
+>
+> **Remove it:**
+>
+> ```bash
+> nox plugin remove nox/threat-explain
+> nox plugin install nox/threat-enrich   # if you want the write-ups
+> ```
+>
+> Then update `plugins.required` in `.nox.yaml`.
+>
+> Detail in [#50](https://github.com/Nox-HQ/nox-plugin-threat-explain/issues/50).
+
+---
+
 # nox-plugin-threat-explain
 
 **Threat pattern detection with audience-targeted impact explanations for developers, executives, and compliance teams.**
